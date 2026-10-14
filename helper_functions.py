@@ -1,5 +1,6 @@
 """Helper functions for HW3"""
 import numpy as np
+import matplotlib.pyplot as plt
 from copy import deepcopy
 from matplotlib.axes import Axes
 
@@ -70,10 +71,87 @@ def neighbor_joining(distances: np.ndarray, labels: list) -> Node:
         A root node of the neighbor joining tree.
 
     """
-    
-    self.tree = Node()
+    D = np.asarray(distances, dtype=float).copy()
+    labels = list(labels)
 
-    raise NotImplementedError()
+    # One Node object per original taxon
+    nodes = [Node(name, None, 0.0, None, 0.0) for name in labels]
+
+    internal_count = 0
+
+    while len(nodes) > 2:
+        # These three quantities must always agree
+        m = len(nodes)
+        assert m == D.shape[0] == D.shape[1], (
+            f"Inconsistent state: nodes={m}, D shape={D.shape}"
+        )
+
+        # Total divergence of each active node from all others
+        row_sums = D.sum(axis=1)
+
+        # Neighbour-joining criterion
+        Q = (m - 2) * D - row_sums[:, None] - row_sums[None, :]
+        np.fill_diagonal(Q, np.inf)
+
+        # Choose the pair with the smallest Q value
+        flat_index = np.argmin(Q)
+        i, j = np.unravel_index(flat_index, Q.shape)
+        i, j = int(i), int(j)
+
+        d_ij = D[i, j]
+
+        # Branch lengths from the joined pair to the new internal node
+        left_distance = 0.5 * d_ij + (row_sums[i] - row_sums[j]) / (2 * (m - 2))
+        right_distance = d_ij - left_distance
+
+        new_node = Node(
+            name=f"Node_{internal_count}",
+            left=nodes[i],
+            left_distance=float(left_distance),
+            right=nodes[j],
+            right_distance=float(right_distance),
+        )
+        internal_count += 1
+
+        # Indices that remain after removing i and j
+        keep = [k for k in range(m) if k != i and k != j]
+
+        # Distance from the new node to each remaining node
+        new_distances = np.array(
+            [
+                0.5 * (D[i, k] - left_distance) + 0.5 * (D[j, k] - right_distance)
+                for k in keep
+            ],
+            dtype=float,
+        )
+
+        # Build the new distance matrix:
+        # old remaining nodes first, then the new node last
+        n_remaining = len(keep)
+
+        D_new = np.zeros((n_remaining + 1, n_remaining + 1), dtype=float)
+        D_new[:n_remaining, :n_remaining] = D[np.ix_(keep, keep)]
+        D_new[:n_remaining, n_remaining] = new_distances
+        D_new[n_remaining, :n_remaining] = new_distances
+
+        D = D_new
+
+        # Keep the node list consistent with the new distance matrix
+        nodes = [nodes[k] for k in keep] + [new_node]
+        labels = [labels[k] for k in keep] + [new_node.name]
+
+    # Join the final two nodes with an artificial root
+    final_distance = float(D[0, 1])
+
+    root = Node(
+        name="root",
+        left=nodes[0],
+        left_distance=final_distance / 2,
+        right=nodes[1],
+        right_distance=final_distance / 2,
+    )
+
+    return root
 
 
 def plot_nj_tree(tree: Node, ax: Axes = None, **kwargs) -> None:
@@ -99,6 +177,77 @@ def plot_nj_tree(tree: Node, ax: Axes = None, **kwargs) -> None:
     >>> fig.savefig("example.png")
 
     """
+    
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 6))
+
+    color = kwargs.get("color", "black")
+    linewidth = kwargs.get("linewidth", 1.5)
+    fontsize = kwargs.get("fontsize", 10)
+
+    leaf_counter = 0
+    positions = {}
+
+    def get_position(node: Node, x: float):
+        """Recursively assign (x, y) coordinates and draw branches."""
+        nonlocal leaf_counter
+
+        # Leaf: place at the next available vertical position
+        if node.left is None and node.right is None:
+            y = leaf_counter
+            leaf_counter += 1
+            positions[node.name] = (x, y)
+            ax.text(
+                x + 0.05,
+                y,
+                node.name,
+                va="center",
+                ha="left",
+                fontsize=fontsize,
+            )
+            return x, y
+
+        # Internal node: recursively process children
+        left_x, left_y = get_position(node.left, x + node.left_distance)
+        right_x, right_y = get_position(node.right, x + node.right_distance)
+
+        y = (left_y + right_y) / 2
+        positions[node.name] = (x, y)
+
+        # Horizontal branch to left child
+        ax.plot(
+            [x, left_x],
+            [left_y, left_y],
+            color=color,
+            linewidth=linewidth,
+        )
+
+        # Horizontal branch to right child
+        ax.plot(
+            [x, right_x],
+            [right_y, right_y],
+            color=color,
+            linewidth=linewidth,
+        )
+
+        # Vertical connector representing divergence at the common ancestor
+        ax.plot(
+            [x, x],
+            [left_y, right_y],
+            color=color,
+            linewidth=linewidth,
+        )
+
+        return x, y
+
+    get_position(tree, 0.0)
+
+    ax.set_xlabel("Genetic distance")
+    ax.set_ylabel("Leaves")
+    ax.set_yticks([])
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
 
     return ax
 
