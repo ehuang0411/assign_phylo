@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from copy import deepcopy
 from matplotlib.axes import Axes
 
+"""Helper functions for Q4"""
+from Bio.Align import substitution_matrices
 
 class Node:
     def __init__(
@@ -177,73 +179,50 @@ def plot_nj_tree(tree: Node, ax: Axes = None, **kwargs) -> None:
     >>> fig.savefig("example.png")
 
     """
-    
+
     if ax is None:
-        _, ax = plt.subplots(figsize=(8, 6))
+        _, ax = plt.subplots(figsize=(12, 8))
 
     color = kwargs.get("color", "black")
-    linewidth = kwargs.get("linewidth", 1.5)
-    fontsize = kwargs.get("fontsize", 10)
+    linewidth = kwargs.get("linewidth", 1.2)
+    fontsize = kwargs.get("fontsize", 9)
+    leaf_colors = kwargs.get("leaf_colors", {})
 
     leaf_counter = 0
-    positions = {}
 
     def get_position(node: Node, x: float):
-        """Recursively assign (x, y) coordinates and draw branches."""
         nonlocal leaf_counter
 
-        # Leaf: place at the next available vertical position
         if node.left is None and node.right is None:
             y = leaf_counter
             leaf_counter += 1
-            positions[node.name] = (x, y)
+
             ax.text(
-                x + 0.05,
+                x + 0.02,
                 y,
                 node.name,
                 va="center",
                 ha="left",
                 fontsize=fontsize,
+                color=leaf_colors.get(node.name, "black"),
             )
+
             return x, y
 
-        # Internal node: recursively process children
         left_x, left_y = get_position(node.left, x + node.left_distance)
         right_x, right_y = get_position(node.right, x + node.right_distance)
 
         y = (left_y + right_y) / 2
-        positions[node.name] = (x, y)
 
-        # Horizontal branch to left child
-        ax.plot(
-            [x, left_x],
-            [left_y, left_y],
-            color=color,
-            linewidth=linewidth,
-        )
-
-        # Horizontal branch to right child
-        ax.plot(
-            [x, right_x],
-            [right_y, right_y],
-            color=color,
-            linewidth=linewidth,
-        )
-
-        # Vertical connector representing divergence at the common ancestor
-        ax.plot(
-            [x, x],
-            [left_y, right_y],
-            color=color,
-            linewidth=linewidth,
-        )
+        ax.plot([x, left_x], [left_y, left_y], color=color, linewidth=linewidth)
+        ax.plot([x, right_x], [right_y, right_y], color=color, linewidth=linewidth)
+        ax.plot([x, x], [left_y, right_y], color=color, linewidth=linewidth)
 
         return x, y
 
     get_position(tree, 0.0)
 
-    ax.set_xlabel("Genetic distance")
-    ax.set_ylabel("Leaves")
+    ax.set_xlabel("Hamming genetic distance")
     ax.set_yticks([])
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -330,6 +309,13 @@ def reroot_tree(original_tree: Node, outgroup_node: Node) -> Node:
 
     return new_root
 
+def _count_leaves(node: Node) -> int:
+    """Count the number of leaves in a subtree."""
+    if node.left is None and node.right is None:
+        return 1
+
+    return _count_leaves(node.left) + _count_leaves(node.right)
+
 
 def sort_children_by_leaves(tree: Node) -> None:
     """Sort the children of a tree by their corresponding number of leaves.
@@ -342,7 +328,21 @@ def sort_children_by_leaves(tree: Node) -> None:
         The root node of the tree.
 
     """
-    raise NotImplementedError()
+    if tree.left is None and tree.right is None:
+            return
+    
+    sort_children_by_leaves(tree.left)
+    sort_children_by_leaves(tree.right)
+
+    left_leaves = _count_leaves(tree.left)
+    right_leaves = _count_leaves(tree.right)
+
+    if left_leaves > right_leaves:
+        tree.left, tree.right = tree.right, tree.left
+        tree.left_distance, tree.right_distance = (
+            tree.right_distance,
+            tree.left_distance,
+        )
 
 
 def plot_nj_tree_radial(tree: Node, ax: Axes = None, **kwargs) -> None:
@@ -369,3 +369,101 @@ def plot_nj_tree_radial(tree: Node, ax: Axes = None, **kwargs) -> None:
 
     """
     raise NotImplementedError()
+
+# From Assignment, Part 1
+def global_alignment(seq1, seq2, scoring_function):
+    n = len(seq1)
+    m = len(seq2)
+
+    # scores [i][j] is the best score for aligning:
+    # seq1[:i] with seq2[:j]
+    scores = [[0.0 for _ in range(m + 1)] for _ in range(n + 1)]
+
+    # Traceback matrix:
+    # 0 = diagonal, 1 = up, 2 = left.
+    traceback = [[0 for _ in range(m + 1)] for _ in range(n + 1)]
+
+    # Initialise first column: align seq1 characters with gaps.
+    for i in range(1, n + 1):
+        scores[i][0] = (
+            scores[i - 1][0] +
+            scoring_function(seq1[i - 1], "-")
+        )
+        traceback[i][0] = 1
+
+    # Initialise first row: align seq2 characters with gaps.
+    for j in range(1, m + 1):
+        scores[0][j] = (
+            scores[0][j - 1] +
+            scoring_function("-", seq2[j - 1])
+        )
+        traceback[0][j] = 2
+
+    # Fill the dynamic-programming matrices.
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            diagonal = (
+                scores[i - 1][j - 1] +
+                scoring_function(seq1[i - 1], seq2[j - 1])
+            )
+
+            up = (
+                scores[i - 1][j] +
+                scoring_function(seq1[i - 1], "-")
+            )
+
+            left = (
+                scores[i][j - 1] +
+                scoring_function("-", seq2[j - 1])
+            )
+
+            # Deliberate tie-breaking:
+            # diagonal preferred over up, and up over left.
+            if diagonal >= up and diagonal >= left:
+                scores[i][j] = diagonal
+                traceback[i][j] = 0
+
+            elif up >= left:
+                scores[i][j] = up
+                traceback[i][j] = 1
+
+            else:
+                scores[i][j] = left
+                traceback[i][j] = 2
+
+    # Reconstruct the alignment by tracing from bottom right to top left.
+    aligned_seq1 = []
+    aligned_seq2 = []
+
+    i = n
+    j = m
+
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and traceback[i][j] == 0:
+            aligned_seq1.append(seq1[i - 1])
+            aligned_seq2.append(seq2[j - 1])
+            i -= 1
+            j -= 1
+
+        elif i > 0 and (j == 0 or traceback[i][j] == 1):
+            aligned_seq1.append(seq1[i - 1])
+            aligned_seq2.append("-")
+            i -= 1
+
+        else:
+            aligned_seq1.append("-")
+            aligned_seq2.append(seq2[j - 1])
+            j -= 1
+
+    aligned_seq1.reverse()
+    aligned_seq2.reverse()
+
+    return (
+        "".join(aligned_seq1),
+        "".join(aligned_seq2),
+        float(scores[n][m]),
+    )
+
+def scoring_function(aa_i,aa_j):
+    score = [-1, 1][aa_i == aa_j]
+    return (score)
